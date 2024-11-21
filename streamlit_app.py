@@ -1,151 +1,137 @@
 import streamlit as st
+from streamlit_folium import st_folium
+import folium
 import pandas as pd
-import math
-from pathlib import Path
+import numpy as np
+import plotly.graph_objects as go
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
-)
+# Set Streamlit page configuration
+st.set_page_config(layout="wide")
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+# Custom styles for dividers
+horizontal_line_style = "border: 2px solid #ccc; margin: 20px 0;"
+vertical_divider_style = """
+    <div style="
+        height: 100%;
+        width: 2px;
+        background-color: #ccc;
+        position: absolute;
+        left: 50%;
+        top: 0;
+    "></div>
+"""
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
+# Render vertical divider
+st.markdown(vertical_divider_style, unsafe_allow_html=True)
 
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
+# Divide the layout into two main columns (left and right)
+col1, col2 = st.columns([1, 1], gap="medium")
 
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
+# **Left Section: Folium Map**
+with col1:
+    map_height = 800  # Adjust the height as needed
 
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
+    # Load the data from the CSV file
+    data = pd.read_csv("https://drive.google.com/uc?export=download&id=1hdco3Lnkt7Fz8PlI33A153T9Mt77nUSY")
 
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
+    # Filter for only Pennsylvania (state 'PA') entries
+    data_pa = data[data['state'] == 'PA']
 
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
+    # Further filter for only restaurants in Philadelphia area
+    # Define the approximate bounding box for Philadelphia (adjust as needed)
+    philly_bounds = {
+        "north": 40.137992,
+        "south": 39.867004,
+        "east": -74.955763,
+        "west": -75.280303
+    }
+    data_philly = data_pa[
+        (data_pa['latitude'] >= philly_bounds['south']) &
+        (data_pa['latitude'] <= philly_bounds['north']) &
+        (data_pa['longitude'] >= philly_bounds['west']) &
+        (data_pa['longitude'] <= philly_bounds['east'])
+    ]
 
-    return gdp_df
+    # Initialize the map centered on Philadelphia
+    philadelphia_map = folium.Map(location=[39.9526, -75.1652], zoom_start=12)
 
-gdp_df = get_gdp_data()
+    # Define grid size (e.g., 0.01 degrees per cell)
+    lat_step = 0.01
+    lon_step = 0.01
 
-# -----------------------------------------------------------------------------
-# Draw the actual page
+    # Generate grid cells within the bounding box
+    lat_bins = np.arange(philly_bounds['south'], philly_bounds['north'], lat_step)
+    lon_bins = np.arange(philly_bounds['west'], philly_bounds['east'], lon_step)
 
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
+    # Loop over each cell in the grid
+    for lat in lat_bins:
+        for lon in lon_bins:
+            # Filter restaurants within this grid cell
+            cell_data = data_philly[
+                (data_philly['latitude'] >= lat) &
+                (data_philly['latitude'] < lat + lat_step) &
+                (data_philly['longitude'] >= lon) &
+                (data_philly['longitude'] < lon + lon_step)
+            ]
+            
+            # Calculate the average rating for restaurants in this cell
+            if len(cell_data) > 0:
+                avg_rating = cell_data['stars'].mean()
+                avg_rating_text = f"Average Rating: {avg_rating:.2f}"
+                
+                # Determine color based on average rating with finer gradient
+                if avg_rating >= 4.5:
+                    color = "#00FF00"  # Green
+                elif avg_rating >= 4.0:
+                    color = "#7FFF00"  # Lime Green
+                elif avg_rating >= 3.5:
+                    color = "#FFFF00"  # Yellow
+                elif avg_rating >= 3.25:
+                    color = "#FFD700"  # Light Orange (Gold)
+                elif avg_rating >= 3.0:
+                    color = "#FFA500"  # Orange
+                elif avg_rating >= 2.5:
+                    color = "#FF8C00"  # Dark Orange
+                else:
+                    color = "#FF0000"  # Red
+                
+                # Add a rectangle for this grid cell with a tooltip
+                folium.Rectangle(
+                    bounds=[[lat, lon], [lat + lat_step, lon + lon_step]],
+                    color=color,
+                    fill=True,
+                    fill_color=color,
+                    fill_opacity=0.2,  # Reduced opacity for better transparency
+                    tooltip=avg_rating_text
+                ).add_to(philadelphia_map)
 
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
+    # Render the updated map in the Streamlit interface
+    st_folium(philadelphia_map, width=700, height=map_height)
 
-# Add some spacing
-''
-''
+# **Right Section: Charts and Description**
+with col2:
+    # Top Section: Charts
+    chart_col1, chart_col2 = st.columns(2)  # Two charts side by side
 
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
+    # Plotly Bar Chart (With Dummy Data)
+    with chart_col1:
+        bar_chart = go.Figure(
+            data=[go.Bar(x=["Category A", "Category B", "Category C"], y=[100, 150, 200])],
+            layout=go.Layout(title="Bar Chart", xaxis=dict(title="Categories"), yaxis=dict(title="Values"))
         )
+        st.plotly_chart(bar_chart, use_container_width=True)
+
+    # Plotly Pie Chart (With Dummy Data)
+    with chart_col2:
+        pie_chart = go.Figure(
+            data=[go.Pie(labels=["Category A", "Category B", "Category C"], values=[30, 50, 20])],
+            layout=go.Layout(title="Pie Chart")
+        )
+        st.plotly_chart(pie_chart, use_container_width=True)
+
+    # Horizontal Separator Line
+    st.markdown(f'<div style="{horizontal_line_style}"></div>', unsafe_allow_html=True)
+
+    # Bottom Section: Text Description
+    st.write("**Analysis Description**")
+    st.write("Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.")
